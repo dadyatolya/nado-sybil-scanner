@@ -17,6 +17,7 @@
   Unofficial community tool — not affiliated with or endorsed by Nado. Cluster flags are statistical heuristics, not proof of wrongdoing.
   <strong>Verify anything important yourself.</strong>
 </div>
+<div id="stats-strip" class="stats-strip"></div>
 
 <div class="wrap">
   <main>
@@ -97,6 +98,7 @@
 <script src="/app.js"></script>
 <script>
   renderNav("clusters");
+  renderStatsStrip();
 
   async function scanDeposits() {
     const btn = document.getElementById("deposit-scan-btn");

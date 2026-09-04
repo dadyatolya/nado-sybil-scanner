@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Sybil Scanner for Nado — Admin</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><span class="mark"></span>SYBIL SCANNER <span class="sub">for Nado</span></div>
+    <nav class="tabs" id="nav"></nav>
+  </div>
+</header>
+<div class="disclaimer">
+  Private admin view — not linked from anywhere in the site, and not counted in the public visit stats.
+  <strong>Never share this URL or your admin key.</strong>
+</div>
+
+<div class="wrap">
+  <main>
+    <h1>Suspicious IPs</h1>
+    <p class="lede">
+      IPs that ran an unusually large number of <em>distinct</em> wallets through the Checker. The idea: a lazy Sybil-farm
+      operator checking whether their own wallets got flagged would tend to do exactly this from one machine. It's a
+      heuristic, not proof — shared IPs (offices, VPNs, mobile carrier-grade NAT) can trigger false positives just as
+      easily. Raw IP addresses are never stored; only a salted hash is kept, so this page can never show you an actual IP.
+    </p>
+
+    <div class="card">
+      <div class="controls-row">
+        <label for="admin-key">Admin key</label>
+        <input type="text" id="admin-key" placeholder="paste ADMIN_KEY here" style="min-width: 260px;" />
+        <label for="min-wallets">Min. distinct wallets</label>
+        <input type="number" id="min-wallets" value="6" min="2" style="max-width: 70px;" />
+        <button id="load-btn">Load</button>
+        <span id="meta" class="faint"></span>
+      </div>
+      <div id="result"><p class="empty-state">Enter your admin key and press Load.</p></div>
+    </div>
+  </main>
+  <footer>
+    Set the ADMIN_KEY environment variable on the server to enable this page. Without it, /api/admin/suspicious-ips
+    always returns 404.
+  </footer>
+</div>
+
+<script src="/app.js"></script>
+<script>
+  document.getElementById("nav").innerHTML = "";
+
+  function fmtTime(iso) {
+    return iso ? new Date(iso).toLocaleString() : "—";
+  }
+
+  async function loadSuspiciousIps() {
+    const key = document.getElementById("admin-key").value.trim();
+    const minWallets = document.getElementById("min-wallets").value || 6;
+    const btn = document.getElementById("load-btn");
+    const out = document.getElementById("result");
+    const meta = document.getElementById("meta");
+    if (!key) {
+      out.innerHTML = errorBox("Enter the admin key first.");
+      return;
+    }
+    btn.disabled = true;
+    out.innerHTML = '<div class="spinner"></div> loading…';
+    meta.textContent = "";
+    try {
+      const res = await fetch("/api/admin/suspicious-ips?minWallets=" + encodeURIComponent(minWallets), {
+        headers: { Authorization: "Bearer " + key },
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+      meta.textContent = `${body.ips.length} IP(s) at or above the threshold`;
+      out.innerHTML = body.ips.length
+        ? `<table>
+            <thead><tr><th>IP hash</th><th>Distinct wallets</th><th>Total checks</th><th>First seen</th><th>Last seen</th></tr></thead>
+            <tbody>${body.ips
+              .map(
+                (e) =>
+                  `<tr><td class="mono">${e.ipHash}</td><td class="mono">${e.distinctWallets}</td><td class="mono">${e.totalChecks}</td><td class="mono">${fmtTime(
+                    e.firstSeen
+                  )}</td><td class="mono">${fmtTime(e.lastSeen)}</td></tr>`
+              )
+              .join("")}</tbody>
+          </table>`
+        : '<p class="empty-state">No IPs at or above this threshold yet.</p>';
+    } catch (err) {
+      out.innerHTML = errorBox("Load failed: " + err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById("load-btn").addEventListener("click", loadSuspiciousIps);
+  document.getElementById("admin-key").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") loadSuspiciousIps();
+  });
+</script>
+</body>
+</html>

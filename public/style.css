@@ -110,6 +110,18 @@ nav.tabs a.active { color: var(--bg); background: var(--accent); }
 }
 .disclaimer strong { color: var(--text-dim); }
 
+.stats-strip {
+  font-size: 12px;
+  font-family: var(--mono);
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  padding: 7px 20px;
+  text-align: center;
+  letter-spacing: 0.01em;
+}
+.stats-strip strong { color: var(--accent); font-weight: 600; }
+
 main { padding-top: 32px; }
 
 h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; }

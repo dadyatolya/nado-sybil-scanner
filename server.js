@@ -11,6 +11,17 @@ import { fetchWalletDeposits, fetchGlobalDeposits, fetchGlobalFills, fetchFundin
 import { findDepositClusters, findMirrorTradeClusters } from "./lib/clusters.js";
 import { explorerAddressUrl } from "./lib/inkExplorer.js";
 import { parseHoursParam, parseProductIds } from "./lib/params.js";
+import { recordPageView, recordWalletCheck, getStats } from "./lib/stats.js";
+import { recordCheckerIp, getClientIp, getSuspiciousIps } from "./lib/ipActivity.js";
+
+const ADMIN_KEY = process.env.ADMIN_KEY || null;
+
+function isAdminAuthorized(req) {
+  if (!ADMIN_KEY) return false; // feature disabled entirely if no key is configured
+  const auth = req.headers.authorization || "";
+  const [scheme, token] = auth.split(" ");
+  return scheme === "Bearer" && token === ADMIN_KEY;
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -61,6 +72,11 @@ function requireAddress(query, res) {
 }
 
 const routes = {
+  "GET /api/stats": async (_query, res) => {
+    const stats = await getStats();
+    sendJson(res, 200, stats);
+  },
+
   "GET /api/dashboard/tvl": async (_query, res) => {
     const tvl = await fetchNadoTvlCurrent();
     sendJson(res, 200, tvl);
@@ -146,9 +162,11 @@ const routes = {
     });
   },
 
-  "GET /api/checker": async (query, res) => {
+  "GET /api/checker": async (query, res, req) => {
     const address = requireAddress(query, res);
     if (!address) return;
+    recordWalletCheck(address); // fire-and-forget — never blocks the response
+    recordCheckerIp(getClientIp(req), address); // fire-and-forget — see lib/ipActivity.js
     const { hours: depositHours, isAll: depositIsAll } = parseHoursParam(query.get("depositHours"), 24);
     const { hours: mirrorHours, isAll: mirrorIsAll } = parseHoursParam(query.get("mirrorHours"), 6);
     const productIds = parseProductIds(query.get("products"));
@@ -203,6 +221,21 @@ const routes = {
       },
     });
   },
+
+  "GET /api/admin/suspicious-ips": async (query, res, req) => {
+    if (!ADMIN_KEY) {
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Not found");
+      return;
+    }
+    if (!isAdminAuthorized(req)) {
+      sendJson(res, 401, { error: "Missing or invalid admin key." });
+      return;
+    }
+    const minWallets = Math.max(2, Number.parseInt(query.get("minWallets"), 10) || 6);
+    const ips = await getSuspiciousIps({ minWallets });
+    sendJson(res, 200, { minWallets, ips });
+  },
 };
 
 const server = http.createServer(async (req, res) => {
@@ -211,7 +244,7 @@ const server = http.createServer(async (req, res) => {
 
   if (routes[routeKey]) {
     try {
-      await routes[routeKey](url.searchParams, res);
+      await routes[routeKey](url.searchParams, res, req);
     } catch (err) {
       console.error(`[${routeKey}]`, err);
       sendJson(res, 502, { error: err.message || "Upstream request failed." });
@@ -224,6 +257,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Unlinked admin page (key-gated client-side against /api/admin/*)
+  // deliberately kept out of cleanRoutes/pageStatKeys below — it shouldn't
+  // bump the public visit counters or appear anywhere in nav.
+  if (url.pathname === "/admin") {
+    await sendStatic(res, path.join(PUBLIC_DIR, "admin.html"));
+    return;
+  }
+
   // Clean-URL static routing for the three pages, plus generic static assets.
   const cleanRoutes = {
     "/": "dashboard.html",
@@ -231,7 +272,9 @@ const server = http.createServer(async (req, res) => {
     "/clusters": "clusters.html",
     "/checker": "checker.html",
   };
+  const pageStatKeys = { "/": "dashboard", "/dashboard": "dashboard", "/clusters": "clusters", "/checker": "checker" };
   if (cleanRoutes[url.pathname]) {
+    recordPageView(pageStatKeys[url.pathname]); // fire-and-forget
     await sendStatic(res, path.join(PUBLIC_DIR, cleanRoutes[url.pathname]));
     return;
   }

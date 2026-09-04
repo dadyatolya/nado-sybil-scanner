@@ -12,6 +12,26 @@ function renderNav(active) {
     .join("");
 }
 
+// Fills the #stats-strip element (present on every page) with the raw
+// usage counters from /api/stats. Best-effort: if the endpoint fails or the
+// counters haven't persisted yet (e.g. right after a fresh deploy with no
+// volume attached), it just quietly leaves the strip empty instead of
+// showing an error — this is a nice-to-have, not something worth alarming
+// a visitor over.
+async function renderStatsStrip() {
+  const el = document.getElementById("stats-strip");
+  if (!el) return;
+  try {
+    const s = await fetchJson("/api/stats");
+    el.innerHTML =
+      `<strong>${s.totalVisits.toLocaleString("en-US")}</strong> site visits · ` +
+      `<strong>${s.uniqueWalletsChecked.toLocaleString("en-US")}</strong> distinct wallets checked ` +
+      `(${s.totalWalletChecks.toLocaleString("en-US")} checks total)`;
+  } catch {
+    // stats endpoint down or unreachable — not worth showing an error for this
+  }
+}
+
 async function fetchJson(url) {
   const res = await fetch(url);
   const body = await res.json().catch(() => ({}));

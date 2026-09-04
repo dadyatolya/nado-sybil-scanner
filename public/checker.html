@@ -15,8 +15,10 @@
 </header>
 <div class="disclaimer">
   Unofficial community tool — not affiliated with or endorsed by Nado. Cluster flags are statistical heuristics, not proof of wrongdoing.
-  <strong>Verify anything important yourself.</strong>
+  <strong>Verify anything important yourself.</strong> The Checker also keeps a salted hash of your IP to spot abuse patterns (e.g. one machine
+  checking many wallets) — never a plaintext IP, and never shown publicly.
 </div>
+<div id="stats-strip" class="stats-strip"></div>
 
 <div class="wrap">
   <main>
@@ -55,6 +57,7 @@
 <script src="/app.js"></script>
 <script>
   renderNav("checker");
+  renderStatsStrip();
 
   function statusBadge(flagged) {
     return flagged

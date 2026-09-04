@@ -68,6 +68,38 @@ node --test test/clusters.test.js
 | `ALL_TIME_MAX_PAGES` | `500` — page cap for an "All time" scan (per deposit scan, or per product for mirror trading) |
 | `ALL_TIME_BUDGET_MS` | `50000` — wall-clock budget (ms) for an "All time" scan before it stops and reports `truncated: true` |
 | `EXCLUDED_FUNDERS` | *(empty)* — comma-separated addresses to always exclude as a cluster #3 "funding hub" (exchanges, bridges, your own treasury, etc.) — see "Excluding exchange wallets" above |
+| `STATS_DIR` | `./data` — where usage-stats.json is written; see "Usage stats" below |
+| `ADMIN_KEY` | *(unset)* — secret key that enables the admin-only "suspicious IPs" endpoint/page; the feature is fully disabled (404) while this is unset. See "Abuse signal" below |
+| `IP_SALT` | *(random, generated on boot)* — salt mixed into the IP hash used for abuse detection; set this explicitly if you want hashes to stay stable across redeploys even without a persistent volume |
+| `IP_ACTIVITY_DIR` | same default as `STATS_DIR` — where `ip-activity.json` is written |
+
+## Usage stats
+
+A small counter strip (site visits · distinct wallets checked · total checks) shows at the top of every page, backed by `GET /api/stats` and `lib/stats.js`. It's deliberately simple — no cookies, no bot filtering, a page refresh counts as another visit — so treat it as a rough "is anyone using this" signal (handy as traction evidence, e.g. for a grant application), not real analytics.
+
+Counts are written to a JSON file (`data/stats.json` by default) so they survive ordinary restarts. **They will NOT survive a redeploy** unless that file lives on a persistent Volume — Railway (and most PaaS platforms) build a fresh container from your GitHub repo on every deploy, and anything written at runtime outside of a mounted volume is thrown away with the old container. To make the counters durable across deploys on Railway:
+
+1. Open your service on Railway → **Settings** → **Volumes** → **+ New Volume**.
+2. Set the mount path to `/data`.
+3. Add an environment variable `STATS_DIR` = `/data` (Settings → Variables).
+4. Redeploy once (Railway does this automatically after a variable change). From then on, `data/stats.json` lives on the volume and survives future deploys.
+
+Without a volume, the strip still works — it just resets to zero the next time you push a code update, which is fine if you mainly care about "traffic since the last change" rather than a running lifetime total.
+
+## Abuse signal: suspicious IPs (admin-only)
+
+The Checker also tracks, per client IP, how many *distinct* wallet addresses have been looked up. Rationale: a lazy Sybil-farm operator checking whether their own controlled wallets got flagged would tend to run a bunch of different addresses through the Checker from one machine — same underlying idea as the on-chain cluster heuristics, just based on who's asking instead of on-chain behavior.
+
+**Privacy design:**
+
+- The raw IP is never stored. It's hashed (SHA-256, salted, truncated) before being kept in memory or on disk — the stored value cannot be turned back into an IP address.
+- Nothing here is ever shown on a public page. It's exposed only through `GET /api/admin/suspicious-ips`, and that route is **completely disabled (404, not just "unauthorized")** unless you set the `ADMIN_KEY` environment variable.
+- With `ADMIN_KEY` set, the route requires an `Authorization: Bearer <key>` header matching it — anything else gets `401`.
+- There's a simple, unlinked page at `/admin` (not in the nav, not counted in the visit stats) where you can paste the key and view the list — see the "Min. distinct wallets" field there, default matches the ">5" threshold from the on-chain cluster heuristics.
+
+**To enable it on Railway:** Settings → Variables → add `ADMIN_KEY` = any long random string you pick, then visit `https://<your-domain>/admin` and paste that same string in.
+
+**Like the cluster heuristics, this is a signal, not proof.** A shared IP — an office, a university, a VPN exit node, mobile carrier-grade NAT — can easily push several unrelated people's wallet checks through the same address and light this up with zero bad intent. Treat a high count as "worth a closer look," never as a verdict on its own. Same persistence caveat as the usage stats: without a Volume mounted at `IP_ACTIVITY_DIR`/`STATS_DIR`, this resets on every redeploy (and the salt regenerates too, so old hashes simply stop matching — tracking just starts over cleanly).
 
 ## Deploying so it has a real, stable public URL
 
@@ -118,6 +150,9 @@ lib/
   unionFind.js            small union-find for graph clustering
   exchangeWallets.js      exclude-list for cluster #3's "funding hub" check
   params.js               pure query-param parsers (testable without a live server)
-public/                  dashboard.html, clusters.html, checker.html, style.css, app.js
+  stats.js                 usage counters (site visits, wallets checked), JSON-file backed
+  ipActivity.js            admin-only abuse signal: hashed per-IP distinct-wallet-check counts
+public/                  dashboard.html, clusters.html, checker.html, admin.html, style.css, app.js
+data/                    runtime-created; stats.json + ip-activity.json live here — gitignored
 test/clusters.test.js    unit tests for lib/clusters.js (node --test, no deps)
 ```
