@@ -1,0 +1,15 @@
+{
+  "name": "nado-sybil-scanner",
+  "version": "1.0.0",
+  "description": "Sybil-cluster checker for Nado (Ink L2) — deposit-pattern and mirror-trading detection using Ink Explorer + Nado Archive API",
+  "type": "module",
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node --test test/clusters.test.js"
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sybil Scanner for Nado — Dashboard</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand"><span class="mark"></span>SYBIL SCANNER <span class="sub">for Nado</span></div>
+    <nav class="tabs" id="nav"></nav>
+  </div>
+</header>
+<div class="disclaimer">
+  Unofficial community tool — not affiliated with or endorsed by Nado. Cluster flags are statistical heuristics, not proof of wrongdoing.
+  <strong>Verify anything important yourself.</strong>
+</div>
+
+<div class="wrap">
+  <main>
+    <h1>Dashboard</h1>
+    <p class="lede">Protocol-wide TVL for Nado (Ink L2), plus a lookup for any single wallet's value in the protocol over time.</p>
+
+    <div class="card">
+      <h2>Nado — Total Value Locked</h2>
+      <div id="tvl-stats" class="stat-row">
+        <div class="spinner"></div> loading…
+      </div>
+      <p class="faint" style="margin-top: 14px;">Source: DefiLlama (<a href="https://defillama.com/protocol/nado" target="_blank" rel="noopener">defillama.com/protocol/nado</a>)</p>
+    </div>
+
+    <div class="card">
+      <h2>Look up a wallet's value in Nado over time</h2>
+      <div class="field-row">
+        <input type="text" id="wallet-input" placeholder="0x… wallet address" />
+        <button id="wallet-btn">Look up</button>
+      </div>
+      <div id="wallet-result" style="margin-top: 18px;"></div>
+    </div>
+  </main>
+  <footer>
+    Data sources: Ink Explorer (Blockscout) · Nado Archive API · DefiLlama. Nothing here is financial advice.
+  </footer>
+</div>
+
+<script src="/app.js"></script>
+<script>
+  renderNav("dashboard");
+
+  async function loadTvl() {
+    const el = document.getElementById("tvl-stats");
+    try {
+      const data = await fetchJson("/api/dashboard/tvl");
+      el.innerHTML = `
+        <div class="stat">
+          <div class="label">Current TVL</div>
+          <div class="value">${fmtUsd(data.tvlUsd)}</div>
+        </div>
+        <div class="stat">
+          <div class="label">As of</div>
+          <div class="value small">${data.asOf ? new Date(data.asOf * 1000).toLocaleString() : "—"}</div>
+        </div>
+        <div class="stat">
+          <div class="label">History points</div>
+          <div class="value small">${data.history ? data.history.length : 0}</div>
+        </div>`;
+    } catch (err) {
+      el.innerHTML = errorBox("Could not load TVL: " + err.message);
+    }
+  }
+
+  async function lookupWallet() {
+    const input = document.getElementById("wallet-input");
+    const btn = document.getElementById("wallet-btn");
+    const out = document.getElementById("wallet-result");
+    const address = input.value.trim();
+    if (!isValidAddress(address)) {
+      out.innerHTML = errorBox("Enter a valid 0x… address (42 characters).");
+      return;
+    }
+    btn.disabled = true;
+    out.innerHTML = '<div class="spinner"></div> scanning Nado + Ink Explorer for this wallet…';
+    try {
+      const data = await fetchJson("/api/dashboard/wallet?address=" + encodeURIComponent(address));
+      const p = data.portfolio;
+      const hasPortfolio = p && !p.error;
+      let accountValueRow = "—";
+      let series = null;
+      if (hasPortfolio) {
+        // Response shape not independently verified from this build environment
+        // (see README) — try a couple of plausible layouts defensively.
+        series =
+          p.accountValueHistory ||
+          p["1d"]?.accountValueHistory ||
+          p.history?.accountValueHistory ||
+          null;
+      }
+      if (Array.isArray(series) && series.length) {
+        const last = series[series.length - 1];
+        accountValueRow = fmtUsd(Array.isArray(last) ? last[1] : last?.value);
+      }
+      const depositRows = (data.onChainDeposits || [])
+        .slice(0, 10)
+        .map(
+          (d) =>
+            `<tr><td class="mono">${fmtUsd(d.amount)}</td><td class="mono">${d.timestamp ? new Date(d.timestamp * 1000).toLocaleString() : "—"}</td><td class="mono"><a href="${data.explorerUrl.replace(
+              "/address/",
+              "/tx/"
+            )}${d.txHash || ""}" target="_blank" rel="noopener">${fmtAddr(d.txHash || "")}</a></td></tr>`
+        )
+        .join("");
+
+      out.innerHTML = `
+        <div class="stat-row" style="margin-bottom: 16px;">
+          <div class="stat">
+            <div class="label">Wallet</div>
+            <div class="value small mono"><a href="${data.explorerUrl}" target="_blank" rel="noopener">${fmtAddr(data.address)}</a></div>
+          </div>
+          <div class="stat">
+            <div class="label">Account value (latest)</div>
+            <div class="value">${accountValueRow}</div>
+          </div>
+          <div class="stat">
+            <div class="label">On-chain deposits found</div>
+            <div class="value small">${data.onChainDeposits ? data.onChainDeposits.length : 0}</div>
+          </div>
+        </div>
+        ${
+          !hasPortfolio
+            ? errorBox("Nado Archive API portfolio lookup failed" + (p && p.error ? ": " + p.error : "") + ". On-chain deposit data below still comes from Ink Explorer.")
+            : ""
+        }
+        <h2 style="margin-top: 20px;">Recent on-chain deposits (Ink Explorer)</h2>
+        ${
+          depositRows
+            ? `<table><thead><tr><th>Amount</th><th>Time</th><th>Tx</th></tr></thead><tbody>${depositRows}</tbody></table>`
+            : '<p class="empty-state">No deposits found for this address in the scanned window.</p>'
+        }
+      `;
+    } catch (err) {
+      out.innerHTML = errorBox("Lookup failed: " + err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  document.getElementById("wallet-btn").addEventListener("click", lookupWallet);
+  document.getElementById("wallet-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") lookupWallet();
+  });
+
+  loadTvl();
+</script>
+</body>
+</html>
