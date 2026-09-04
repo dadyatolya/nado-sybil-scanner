@@ -10,6 +10,7 @@ import { isAddress, normalizeAddress } from "./lib/subaccount.js";
 import { fetchWalletDeposits, fetchGlobalDeposits, fetchGlobalFills, getKnownProductIds, checkAddress } from "./lib/aggregate.js";
 import { findDepositClusters, findMirrorTradeClusters } from "./lib/clusters.js";
 import { explorerAddressUrl } from "./lib/inkExplorer.js";
+import { parseHoursParam, parseProductIds } from "./lib/params.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "public");
@@ -50,20 +51,6 @@ async function sendStatic(res, filePath) {
   }
 }
 
-function parseIntParam(value, fallback) {
-  const n = Number.parseInt(value, 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
-
-function parseProductIds(value) {
-  if (!value) return undefined;
-  const ids = value
-    .split(",")
-    .map((s) => Number.parseInt(s.trim(), 10))
-    .filter(Number.isFinite);
-  return ids.length ? ids : undefined;
-}
-
 function requireAddress(query, res) {
   const address = (query.get("address") || "").trim();
   if (!isAddress(address)) {
@@ -102,7 +89,7 @@ const routes = {
   },
 
   "GET /api/clusters/deposits": async (query, res) => {
-    const hours = parseIntParam(query.get("hours"), 24);
+    const { hours, isAll } = parseHoursParam(query.get("hours"), 24);
     const { deposits, scanned, truncated, sinceTs } = await fetchGlobalDeposits({ hours });
     const result = findDepositClusters(deposits, {
       amountTolerance: 0.05,
@@ -110,6 +97,7 @@ const routes = {
     });
     sendJson(res, 200, {
       windowHours: hours,
+      allTime: isAll,
       sinceTs,
       depositsScanned: scanned,
       depositsConsidered: deposits.length,
@@ -119,7 +107,7 @@ const routes = {
   },
 
   "GET /api/clusters/mirror": async (query, res) => {
-    const hours = parseIntParam(query.get("hours"), 6);
+    const { hours, isAll } = parseHoursParam(query.get("hours"), 6);
     const productIds = parseProductIds(query.get("products"));
     const { fills, scanned, truncated, sinceTs, productIds: usedIds } = await fetchGlobalFills({ hours, productIds });
     const result = findMirrorTradeClusters(fills, {
@@ -129,6 +117,7 @@ const routes = {
     });
     sendJson(res, 200, {
       windowHours: hours,
+      allTime: isAll,
       sinceTs,
       productIds: usedIds,
       fillsScanned: scanned,
@@ -141,8 +130,8 @@ const routes = {
   "GET /api/checker": async (query, res) => {
     const address = requireAddress(query, res);
     if (!address) return;
-    const depositHours = parseIntParam(query.get("depositHours"), 24);
-    const mirrorHours = parseIntParam(query.get("mirrorHours"), 6);
+    const { hours: depositHours, isAll: depositIsAll } = parseHoursParam(query.get("depositHours"), 24);
+    const { hours: mirrorHours, isAll: mirrorIsAll } = parseHoursParam(query.get("mirrorHours"), 6);
     const productIds = parseProductIds(query.get("products"));
 
     const subaccount = walletSubaccount(address);
@@ -176,10 +165,12 @@ const routes = {
       mirrorCluster,
       scan: {
         depositWindowHours: depositHours,
+        depositAllTime: depositIsAll,
         depositsScanned: globalDeposits.scanned,
         depositsTruncated: globalDeposits.truncated,
         depositsError: globalDeposits.error || null,
         mirrorWindowHours: mirrorHours,
+        mirrorAllTime: mirrorIsAll,
         fillsScanned: globalFills.scanned,
         fillsTruncated: globalFills.truncated,
         fillsError: globalFills.error || null,

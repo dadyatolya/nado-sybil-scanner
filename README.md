@@ -13,6 +13,8 @@ An unofficial community tool for the [Nado](https://www.nado.xyz) DEX (Ink L2, K
 
 Both are graph-clustered with union-find: any two wallets connected by a qualifying match end up in the same cluster, and clusters transitively absorb more members.
 
+Every scan (Clusters page and Checker) has a lookback-window dropdown that goes up to **All time** — this walks Ink Explorer / Nado's Archive API as far back as it can within a bounded page count and wall-clock budget (`ALL_TIME_MAX_PAGES` / `ALL_TIME_BUDGET_MS` env vars, defaults 500 pages / 50s), rather than a fixed number of hours. A full-history scan of an active market can be a lot of paginated requests, so it can come back with `truncated: true` (shown in the UI as "(partial)") if it hits that budget before reaching genesis — that's the safety valve doing its job, not a bug. Re-running the scan re-walks from the newest data each time (there's no "resume from where it left off" cursor yet), so an all-time scan is inherently slower and less complete on a very active market than a bounded one; the mirror-trading scan in particular walks every known product's full match history in turn, so it's the slower of the two.
+
 **These are statistical heuristics, not proof.** Correlated deposits and offsetting trades can happen for innocent reasons (an exchange's hot wallet, a market maker, friends funding at the same time). Treat flags as a starting point for investigation, not a verdict — the UI says as much on every page.
 
 ## Data sources
@@ -52,6 +54,8 @@ node --test test/clusters.test.js
 | `NADO_ARCHIVE_BASE` | `https://archive.prod.nado.xyz/v1` |
 | `NADO_GATEWAY_BASE` | `https://gateway.prod.nado.xyz/v1` |
 | `INK_EXPLORER_BASE` | `https://explorer.inkonchain.com` |
+| `ALL_TIME_MAX_PAGES` | `500` — page cap for an "All time" scan (per deposit scan, or per product for mirror trading) |
+| `ALL_TIME_BUDGET_MS` | `50000` — wall-clock budget (ms) for an "All time" scan before it stops and reports `truncated: true` |
 
 ## Deploying so it has a real, stable public URL
 

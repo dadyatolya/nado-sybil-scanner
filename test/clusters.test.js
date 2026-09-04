@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { findDepositClusters, findMirrorTradeClusters, normalizeMatchesResponse } from "../lib/clusters.js";
 import { toSubaccount, addressFromSubaccount } from "../lib/subaccount.js";
 import { relDiff, x18ToNumber, rawToNumber } from "../lib/fixedpoint.js";
+import { parseHoursParam, parseIntParam, parseProductIds } from "../lib/params.js";
 
 function addr(suffix) {
   return `0x${"0".repeat(40 - suffix.length)}${suffix}`;
@@ -20,6 +21,23 @@ test("relDiff / x18ToNumber / rawToNumber basics", () => {
   assert.equal(x18ToNumber("-2000000000000000000"), -2); // -2e18
   assert.equal(x18ToNumber(null), 0);
   assert.equal(rawToNumber("100000000", 6), 100); // 100 USDT0 (6 decimals)
+});
+
+test("parseHoursParam: numbers, 'all', and fallback", () => {
+  assert.deepEqual(parseHoursParam("24", 6), { hours: 24, isAll: false });
+  assert.deepEqual(parseHoursParam("all", 6), { hours: null, isAll: true });
+  assert.deepEqual(parseHoursParam("0", 6), { hours: null, isAll: true });
+  assert.deepEqual(parseHoursParam(null, 6), { hours: 6, isAll: false });
+  assert.deepEqual(parseHoursParam("garbage", 6), { hours: 6, isAll: false });
+  assert.deepEqual(parseHoursParam("-5", 6), { hours: 6, isAll: false });
+});
+
+test("parseIntParam / parseProductIds", () => {
+  assert.equal(parseIntParam("42", 1), 42);
+  assert.equal(parseIntParam("nope", 1), 1);
+  assert.deepEqual(parseProductIds("1, 2,3"), [1, 2, 3]);
+  assert.equal(parseProductIds(""), undefined);
+  assert.equal(parseProductIds("nope"), undefined);
 });
 
 test("subaccount round-trip", () => {

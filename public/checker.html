@@ -34,12 +34,14 @@
           <option value="6">6h</option>
           <option value="24" selected>24h</option>
           <option value="168">7d</option>
+          <option value="all">All time</option>
         </select>
         <label for="mirror-hours">Trade window</label>
         <select id="mirror-hours">
           <option value="1">1h</option>
           <option value="6" selected>6h</option>
           <option value="24">24h</option>
+          <option value="all">All time (slow)</option>
         </select>
       </div>
       <div id="result" style="margin-top: 18px;"></div>
@@ -101,12 +103,12 @@
             <tr>
               <td>Funding pattern (deposits)</td>
               <td>${data.scan.depositsError ? '<span class="badge warn">unavailable</span>' : statusBadge(data.flaggedForDepositPattern)}</td>
-              <td class="mono">${data.scan.depositsScanned} deposits / ${data.scan.depositWindowHours}h${data.scan.depositsTruncated ? " (partial)" : ""}</td>
+              <td class="mono">${data.scan.depositsScanned} deposits / ${data.scan.depositAllTime ? "all time" : data.scan.depositWindowHours + "h"}${data.scan.depositsTruncated ? " (partial)" : ""}</td>
             </tr>
             <tr>
               <td>Mirror trading</td>
               <td>${data.scan.fillsError ? '<span class="badge warn">unavailable</span>' : statusBadge(data.flaggedForMirrorTrading)}</td>
-              <td class="mono">${data.scan.fillsScanned} fills / ${data.scan.mirrorWindowHours}h${data.scan.fillsTruncated ? " (partial)" : ""}</td>
+              <td class="mono">${data.scan.fillsScanned} fills / ${data.scan.mirrorAllTime ? "all time" : data.scan.mirrorWindowHours + "h"}${data.scan.fillsTruncated ? " (partial)" : ""}</td>
             </tr>
           </tbody>
         </table>
