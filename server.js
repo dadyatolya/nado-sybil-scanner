@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { fetchNadoTvlCurrent } from "./lib/defillama.js";
 import { fetchPortfolio, walletSubaccount } from "./lib/nadoClient.js";
 import { isAddress, normalizeAddress } from "./lib/subaccount.js";
-import { fetchWalletDeposits, fetchGlobalDeposits, fetchGlobalFills, getKnownProductIds, checkAddress } from "./lib/aggregate.js";
+import { fetchWalletDeposits, fetchGlobalDeposits, fetchGlobalFills, fetchFundingFanOut, getKnownProductIds, checkAddress } from "./lib/aggregate.js";
 import { findDepositClusters, findMirrorTradeClusters } from "./lib/clusters.js";
 import { explorerAddressUrl } from "./lib/inkExplorer.js";
 import { parseHoursParam, parseProductIds } from "./lib/params.js";
@@ -127,6 +127,25 @@ const routes = {
     });
   },
 
+  "GET /api/clusters/funding": async (query, res) => {
+    const { hours, isAll } = parseHoursParam(query.get("hours"), 24);
+    const minFanOut = Math.max(2, Number.parseInt(query.get("minFanOut"), 10) || 6);
+    const result = await fetchFundingFanOut({ hours, minFanOut });
+    sendJson(res, 200, {
+      windowHours: hours,
+      allTime: isAll,
+      minFanOut,
+      sinceTs: result.sinceTs,
+      walletsConsidered: result.walletsConsidered,
+      fundersResolved: result.fundersResolved,
+      unresolvedFunders: result.unresolvedFunders,
+      unscannedWallets: result.unscannedWallets,
+      infraExcluded: result.infraExcluded,
+      truncated: result.truncated,
+      clusters: result.clusters,
+    });
+  },
+
   "GET /api/checker": async (query, res) => {
     const address = requireAddress(query, res);
     if (!address) return;
@@ -135,7 +154,7 @@ const routes = {
     const productIds = parseProductIds(query.get("products"));
 
     const subaccount = walletSubaccount(address);
-    const [portfolio, { globalDeposits, globalFills }] = await Promise.all([
+    const [portfolio, { globalDeposits, globalFills, funding }] = await Promise.all([
       fetchPortfolio(subaccount).catch((err) => ({ error: err.message })),
       checkAddress(address, { depositHours, mirrorHours, productIds }),
     ]);
@@ -145,6 +164,7 @@ const routes = {
 
     const depositCluster = depositReport.clusters.find((c) => c.members.includes(address)) || null;
     const mirrorCluster = mirrorReport.clusters.find((c) => c.members.includes(address)) || null;
+    const fundingCluster = (funding.clusters || []).find((c) => c.members.includes(address)) || null;
 
     const volumeSeries = portfolio?.volumeHistory?.["1d"]?.history?.volumeHistory;
     let totalVolume = null;
@@ -163,6 +183,8 @@ const routes = {
       depositCluster,
       flaggedForMirrorTrading: Boolean(mirrorCluster),
       mirrorCluster,
+      flaggedForFundingFanOut: Boolean(fundingCluster),
+      fundingCluster,
       scan: {
         depositWindowHours: depositHours,
         depositAllTime: depositIsAll,
@@ -174,6 +196,10 @@ const routes = {
         fillsScanned: globalFills.scanned,
         fillsTruncated: globalFills.truncated,
         fillsError: globalFills.error || null,
+        fundingWalletsConsidered: funding.walletsConsidered,
+        fundingUnresolved: funding.unresolvedFunders,
+        fundingTruncated: funding.truncated,
+        fundingError: funding.error || null,
       },
     });
   },

@@ -78,6 +78,32 @@ function renderDepositClusterCard(cluster, youAddr) {
     </div>`;
 }
 
+function renderFundingClusterCard(cluster, youAddr) {
+  const evidence = cluster.edges
+    .slice(0, 10)
+    .map(
+      (e) =>
+        `<tr><td class="mono">${fmtAddr(e.funded)}</td><td class="mono">${e.evidence?.kind || "—"}</td><td class="mono">${e.timestamp ? new Date(e.timestamp * 1000).toISOString() : "—"}</td></tr>`
+    )
+    .join("");
+  return `
+    <div class="cluster-card">
+      <div class="field-row" style="justify-content: space-between;">
+        <strong>${cluster.size} wallets funded by ${walletChip(cluster.funder, youAddr)}</strong>
+        <span class="badge warn">common funding source</span>
+      </div>
+      <p class="faint">Funder is shown as metadata, not itself flagged — it's plausibly an exchange, treasury, or friend. Funded wallets are the ones that later deposited into Nado.</p>
+      <div class="members">${cluster.members.map((m) => walletChip(m, youAddr)).join("")}</div>
+      <details>
+        <summary>show first-funding evidence</summary>
+        <table>
+          <thead><tr><th>Funded wallet</th><th>Via</th><th>First-funded at</th></tr></thead>
+          <tbody>${evidence}</tbody>
+        </table>
+      </details>
+    </div>`;
+}
+
 function renderMirrorClusterCard(cluster, youAddr) {
   const allMatches = cluster.edges.flatMap((e) => e.matches);
   const directCount = allMatches.filter((m) => m.type === "direct_counterparty").length;

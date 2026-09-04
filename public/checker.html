@@ -21,7 +21,7 @@
 <div class="wrap">
   <main>
     <h1>Checker</h1>
-    <p class="lede">Check whether a specific wallet's trading volume and activity pattern lands inside either Sybil-cluster heuristic.</p>
+    <p class="lede">Check whether a specific wallet's trading volume and activity pattern lands inside any of the three Sybil-cluster heuristics.</p>
 
     <div class="card">
       <div class="field-row">
@@ -80,7 +80,7 @@
       const data = await fetchJson(
         `/api/checker?address=${encodeURIComponent(address)}&depositHours=${depositHours}&mirrorHours=${mirrorHours}`
       );
-      const anyFlag = data.flaggedForDepositPattern || data.flaggedForMirrorTrading;
+      const anyFlag = data.flaggedForDepositPattern || data.flaggedForMirrorTrading || data.flaggedForFundingFanOut;
       out.innerHTML = `
         <div class="stat-row" style="margin-bottom: 18px;">
           <div class="stat">
@@ -110,16 +110,23 @@
               <td>${data.scan.fillsError ? '<span class="badge warn">unavailable</span>' : statusBadge(data.flaggedForMirrorTrading)}</td>
               <td class="mono">${data.scan.fillsScanned} fills / ${data.scan.mirrorAllTime ? "all time" : data.scan.mirrorWindowHours + "h"}${data.scan.fillsTruncated ? " (partial)" : ""}</td>
             </tr>
+            <tr>
+              <td>Common funding source</td>
+              <td>${data.scan.fundingError ? '<span class="badge warn">unavailable</span>' : statusBadge(data.flaggedForFundingFanOut)}</td>
+              <td class="mono">${data.scan.fundingWalletsConsidered} depositors checked (${data.scan.fundingUnresolved} unresolved)${data.scan.fundingTruncated ? " (partial)" : ""}</td>
+            </tr>
           </tbody>
         </table>
         ${data.scan.depositsError ? errorBox("Deposit scan (Ink Explorer): " + data.scan.depositsError) : ""}
         ${data.scan.fillsError ? errorBox("Trade scan (Nado Archive API): " + data.scan.fillsError) : ""}
+        ${data.scan.fundingError ? errorBox("Funding-source scan (Ink Explorer): " + data.scan.fundingError) : ""}
 
         ${data.depositCluster ? renderDepositClusterCard(data.depositCluster, data.address) : ""}
         ${data.mirrorCluster ? renderMirrorClusterCard(data.mirrorCluster, data.address) : ""}
+        ${data.fundingCluster ? renderFundingClusterCard(data.fundingCluster, data.address) : ""}
         ${
-          !data.depositCluster && !data.mirrorCluster
-            ? '<p class="empty-state">This wallet did not match either cluster pattern in the scanned window.</p>'
+          !data.depositCluster && !data.mirrorCluster && !data.fundingCluster
+            ? '<p class="empty-state">This wallet did not match any cluster pattern in the scanned window.</p>'
             : ""
         }
       `;

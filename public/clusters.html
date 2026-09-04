@@ -22,8 +22,9 @@
   <main>
     <h1>Clusters</h1>
     <p class="lede">
-      Live scan of recent protocol activity for two Sybil patterns: wallets funded with near-identical amounts minutes apart, and wallets
-      that mirror each other's long/short trades. Scans are windowed and bounded — widen the window for a deeper (slower) scan.
+      Live scan of recent protocol activity for three Sybil patterns: wallets funded with near-identical amounts minutes apart, wallets that
+      mirror each other's long/short trades, and wallets that all trace back to the same funding source. Scans are windowed and bounded —
+      widen the window for a deeper (slower) scan.
     </p>
 
     <div class="card">
@@ -60,10 +61,36 @@
       </div>
       <div id="mirror-results"><p class="empty-state">Run a scan to see results.</p></div>
     </div>
+
+    <div class="card">
+      <h2>③ Common funding source — one wallet first-funded more than N Nado depositors</h2>
+      <p class="lede" style="margin-top: -6px;">
+        Finds the <em>first-ever</em> funder of each depositing wallet (the classic "who bankrolled this fresh wallet" signal) and flags any
+        funder that fed more than the threshold below. Known exchange / bridge wallets are excluded — see
+        <code>lib/exchangeWallets.js</code> and the <code>EXCLUDED_FUNDERS</code> env var if a legitimate wallet shows up here anyway. This
+        scan is the slowest of the three (one to two Ink Explorer lookups per depositor), so expect "(partial)" more often on wide windows.
+      </p>
+      <div class="controls-row">
+        <label for="funding-hours">Lookback window</label>
+        <select id="funding-hours">
+          <option value="6">6 hours</option>
+          <option value="24" selected>24 hours</option>
+          <option value="72">3 days</option>
+          <option value="168">7 days</option>
+          <option value="all">All time (slow — one lookup per depositor)</option>
+        </select>
+        <label for="funding-min">Min. wallets funded</label>
+        <input type="number" id="funding-min" value="6" min="2" style="max-width: 70px;" />
+        <button id="funding-scan-btn">Scan</button>
+        <span id="funding-meta" class="faint"></span>
+      </div>
+      <div id="funding-results"><p class="empty-state">Run a scan to see results.</p></div>
+    </div>
   </main>
   <footer>
-    Funding-pattern data: Ink Explorer (on-chain deposits to Nado's Clearinghouse contract). Mirror-trading data: Nado Archive API (off-chain
-    trade tape — individual trades never touch the chain, so the block explorer alone can't see them).
+    Funding-pattern and common-funding-source data: Ink Explorer (on-chain deposits to Nado's Clearinghouse contract, and each depositor's own
+    inbound transfer history). Mirror-trading data: Nado Archive API (off-chain trade tape — individual trades never touch the chain, so the
+    block explorer alone can't see them).
   </footer>
 </div>
 
@@ -118,8 +145,35 @@
     }
   }
 
+  async function scanFunding() {
+    const btn = document.getElementById("funding-scan-btn");
+    const out = document.getElementById("funding-results");
+    const meta = document.getElementById("funding-meta");
+    const hours = document.getElementById("funding-hours").value;
+    const minFanOut = document.getElementById("funding-min").value || 6;
+    btn.disabled = true;
+    out.innerHTML = '<div class="spinner"></div> looking up each depositor\'s first funder on Ink Explorer — this can take a while…';
+    meta.textContent = "";
+    try {
+      const data = await fetchJson(
+        "/api/clusters/funding?hours=" + encodeURIComponent(hours) + "&minFanOut=" + encodeURIComponent(minFanOut)
+      );
+      meta.textContent = `${data.walletsConsidered} depositors, ${data.fundersResolved} funders resolved (${data.unresolvedFunders} unresolved)${
+        data.infraExcluded ? `, ${data.infraExcluded} excluded as likely exchange/infra` : ""
+      }${data.truncated ? " (scan hit its time budget — partial)" : ""}`;
+      out.innerHTML = data.clusters.length
+        ? data.clusters.map((c) => renderFundingClusterCard(c)).join("")
+        : '<p class="empty-state">No funding hub above the threshold in this window.</p>';
+    } catch (err) {
+      out.innerHTML = errorBox("Scan failed: " + err.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   document.getElementById("deposit-scan-btn").addEventListener("click", scanDeposits);
   document.getElementById("mirror-scan-btn").addEventListener("click", scanMirror);
+  document.getElementById("funding-scan-btn").addEventListener("click", scanFunding);
 </script>
 </body>
 </html>

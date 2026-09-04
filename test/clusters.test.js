@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { findDepositClusters, findMirrorTradeClusters, normalizeMatchesResponse } from "../lib/clusters.js";
+import { findDepositClusters, findMirrorTradeClusters, findFundingFanOutClusters, normalizeMatchesResponse } from "../lib/clusters.js";
 import { toSubaccount, addressFromSubaccount } from "../lib/subaccount.js";
 import { relDiff, x18ToNumber, rawToNumber } from "../lib/fixedpoint.js";
 import { parseHoursParam, parseIntParam, parseProductIds } from "../lib/params.js";
@@ -89,6 +89,49 @@ test("findDepositClusters: chains transitively into one cluster (A~B, B~C)", () 
   const { clusters } = findDepositClusters(deposits, { amountTolerance: 0.05, windowSeconds: 600 });
   assert.equal(clusters.length, 1);
   assert.equal(clusters[0].size, 3);
+});
+
+test("findFundingFanOutClusters: flags a funder that fed more than minFanOut wallets", () => {
+  const funder = addr("f00");
+  const funded = [addr("101"), addr("102"), addr("103"), addr("104"), addr("105"), addr("106")]; // 6 wallets
+  const edges = funded.map((w, i) => ({ funder, funded: w, timestamp: 1_700_000_000 + i, evidence: { kind: "native" } }));
+  const { clusters } = findFundingFanOutClusters(edges, { minFanOut: 6 });
+  assert.equal(clusters.length, 1);
+  assert.equal(clusters[0].funder, funder.toLowerCase());
+  assert.equal(clusters[0].size, 6);
+  assert.deepEqual(clusters[0].members.sort(), funded.map((w) => w.toLowerCase()).sort());
+});
+
+test("findFundingFanOutClusters: does NOT flag a funder under the threshold", () => {
+  const funder = addr("f00");
+  const funded = [addr("101"), addr("102"), addr("103"), addr("104"), addr("105")]; // only 5
+  const edges = funded.map((w, i) => ({ funder, funded: w, timestamp: 1_700_000_000 + i }));
+  const { clusters } = findFundingFanOutClusters(edges, { minFanOut: 6 });
+  assert.equal(clusters.length, 0);
+});
+
+test("findFundingFanOutClusters: excludes a funder on the exclude list even above threshold", () => {
+  const funder = addr("f00");
+  const funded = [addr("101"), addr("102"), addr("103"), addr("104"), addr("105"), addr("106")];
+  const edges = funded.map((w, i) => ({ funder, funded: w, timestamp: 1_700_000_000 + i }));
+  const { clusters } = findFundingFanOutClusters(edges, {
+    minFanOut: 6,
+    excludedFunders: new Set([funder.toLowerCase()]),
+  });
+  assert.equal(clusters.length, 0);
+});
+
+test("findFundingFanOutClusters: self-funding edges and duplicate (funder,funded) pairs are ignored/deduped", () => {
+  const funder = addr("f00");
+  const funded = [addr("101"), addr("102"), addr("103"), addr("104"), addr("105"), addr("106")];
+  const edges = [
+    { funder, funded: funder, timestamp: 1 }, // self-funding, should be dropped
+    ...funded.map((w, i) => ({ funder, funded: w, timestamp: 1_700_000_000 + i })),
+    { funder, funded: funded[0], timestamp: 1_700_000_050 }, // duplicate pair, later timestamp — should not create a 7th member
+  ];
+  const { clusters } = findFundingFanOutClusters(edges, { minFanOut: 6 });
+  assert.equal(clusters.length, 1);
+  assert.equal(clusters[0].size, 6);
 });
 
 function mirrorFill({ wallet, product = "BTC-PERP", side, size, timestamp, kind }) {
