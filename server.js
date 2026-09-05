@@ -5,11 +5,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { fetchNadoTvlCurrent } from "./lib/defillama.js";
-import { fetchPortfolio, walletSubaccount } from "./lib/nadoClient.js";
+import { fetchPortfolio, walletSubaccount, debugOraclePing } from "./lib/nadoClient.js";
 import { isAddress, normalizeAddress } from "./lib/subaccount.js";
 import { fetchWalletDeposits, fetchGlobalDeposits, fetchGlobalFills, fetchFundingFanOut, getKnownProductIds, checkAddress } from "./lib/aggregate.js";
 import { findDepositClusters, findMirrorTradeClusters } from "./lib/clusters.js";
-import { explorerAddressUrl } from "./lib/inkExplorer.js";
+import { explorerAddressUrl, fetchFirstFunder } from "./lib/inkExplorer.js";
 import { parseHoursParam, parseProductIds } from "./lib/params.js";
 import { recordPageView, recordWalletCheck, getStats } from "./lib/stats.js";
 import { recordCheckerIp, getClientIp, getSuspiciousIps } from "./lib/ipActivity.js";
@@ -220,6 +220,28 @@ const routes = {
         fundingError: funding.error || null,
       },
     });
+  },
+
+  // Temporary diagnostic route (safe to leave: read-only, no secrets) — see
+  // README's "Debugging live API assumptions" section. Hits Nado's oracle
+  // price endpoint (used by product discovery / mirror-trading cluster) and
+  // optionally times a single first-funder lookup (used by the
+  // common-funding-source cluster), surfacing real errors instead of the
+  // swallowed ones the normal code paths hide behind empty results.
+  "GET /api/debug/probe": async (query, res) => {
+    const oracle = await debugOraclePing(0);
+    let funder = null;
+    const wallet = (query.get("wallet") || "").trim();
+    if (wallet && isAddress(wallet)) {
+      const startedAt = Date.now();
+      try {
+        const result = await fetchFirstFunder(normalizeAddress(wallet), { maxPages: 3 });
+        funder = { ok: true, elapsedMs: Date.now() - startedAt, result };
+      } catch (err) {
+        funder = { ok: false, elapsedMs: Date.now() - startedAt, error: err.message };
+      }
+    }
+    sendJson(res, 200, { oracle, funder });
   },
 
   "GET /api/admin/suspicious-ips": async (query, res, req) => {
