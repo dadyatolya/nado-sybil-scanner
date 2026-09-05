@@ -9,7 +9,7 @@ import { fetchPortfolio, walletSubaccount, pickPortfolioSeries, debugOraclePing,
 import { isAddress, normalizeAddress } from "./lib/subaccount.js";
 import { fetchWalletDeposits, fetchGlobalDeposits, fetchGlobalFills, fetchFundingFanOut, getKnownProductIds, checkAddress } from "./lib/aggregate.js";
 import { findDepositClusters, findMirrorTradeClusters } from "./lib/clusters.js";
-import { explorerAddressUrl, fetchFirstFunder } from "./lib/inkExplorer.js";
+import { explorerAddressUrl, fetchFirstFunder, debugTransferSourceProbe, NADO_CONTRACTS } from "./lib/inkExplorer.js";
 import { parseHoursParam, parseProductIds } from "./lib/params.js";
 import { recordPageView, recordWalletCheck, getStats } from "./lib/stats.js";
 import { recordCheckerIp, getClientIp, getSuspiciousIps } from "./lib/ipActivity.js";
@@ -335,7 +335,15 @@ const routes = {
         funder = { ok: false, elapsedMs: Date.now() - startedAt, error: err.message };
       }
     }
-    sendJson(res, 200, { oracle, symbols, orders, matrix, funder });
+    let depositSource = null;
+    if (query.get("depositSource")) {
+      const [clearinghouse, endpoint] = await Promise.all([
+        debugTransferSourceProbe(NADO_CONTRACTS.clearinghouse, { pages: 2 }),
+        debugTransferSourceProbe(NADO_CONTRACTS.endpoint, { pages: 2 }),
+      ]);
+      depositSource = { clearinghouse, endpoint };
+    }
+    sendJson(res, 200, { oracle, symbols, orders, matrix, funder, depositSource });
   },
 
   "GET /api/admin/suspicious-ips": async (query, res, req) => {
