@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { fetchNadoTvlCurrent } from "./lib/defillama.js";
-import { fetchPortfolio, walletSubaccount, debugOraclePing } from "./lib/nadoClient.js";
+import { fetchPortfolio, walletSubaccount, pickPortfolioSeries, debugOraclePing, debugOrdersProbe, debugSymbolsProbe } from "./lib/nadoClient.js";
 import { isAddress, normalizeAddress } from "./lib/subaccount.js";
 import { fetchWalletDeposits, fetchGlobalDeposits, fetchGlobalFills, fetchFundingFanOut, getKnownProductIds, checkAddress } from "./lib/aggregate.js";
 import { findDepositClusters, findMirrorTradeClusters } from "./lib/clusters.js";
@@ -184,11 +184,14 @@ const routes = {
     const mirrorCluster = mirrorReport.clusters.find((c) => c.members.includes(address)) || null;
     const fundingCluster = (funding.clusters || []).find((c) => c.members.includes(address)) || null;
 
-    const volumeSeries = portfolio?.volumeHistory?.["1d"]?.history?.volumeHistory;
+    // /portfolio's real shape is an array of [period, seriesObject] pairs
+    // (confirmed via docs.nado.xyz), not an object keyed by "1d" the way
+    // this used to guess before the app had live internet access.
+    const volumeSeries = pickPortfolioSeries(portfolio, "day")?.volumeHistory;
     let totalVolume = null;
     if (Array.isArray(volumeSeries) && volumeSeries.length) {
       const last = volumeSeries[volumeSeries.length - 1];
-      totalVolume = Array.isArray(last) ? last[1] : null;
+      totalVolume = Array.isArray(last) ? Number(last[1]) : null;
     }
 
     sendJson(res, 200, {
@@ -223,13 +226,16 @@ const routes = {
   },
 
   // Temporary diagnostic route (safe to leave: read-only, no secrets) — see
-  // README's "Debugging live API assumptions" section. Hits Nado's oracle
-  // price endpoint (used by product discovery / mirror-trading cluster) and
-  // optionally times a single first-funder lookup (used by the
-  // common-funding-source cluster), surfacing real errors instead of the
-  // swallowed ones the normal code paths hide behind empty results.
+  // README's "Debugging live API assumptions" section. Surfaces real errors
+  // instead of the swallowed ones the normal code paths hide behind empty
+  // results, for the couple of Nado/Ink Explorer assumptions that could
+  // only be checked once this was deployed with real internet access.
   "GET /api/debug/probe": async (query, res) => {
-    const oracle = await debugOraclePing(0);
+    const [oracle, symbols, orders] = await Promise.all([
+      debugOraclePing(0),
+      debugSymbolsProbe(),
+      debugOrdersProbe(Number.parseInt(query.get("productId"), 10) || 1),
+    ]);
     let funder = null;
     const wallet = (query.get("wallet") || "").trim();
     if (wallet && isAddress(wallet)) {
@@ -241,7 +247,7 @@ const routes = {
         funder = { ok: false, elapsedMs: Date.now() - startedAt, error: err.message };
       }
     }
-    sendJson(res, 200, { oracle, funder });
+    sendJson(res, 200, { oracle, symbols, orders, funder });
   },
 
   "GET /api/admin/suspicious-ips": async (query, res, req) => {

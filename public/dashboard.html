@@ -89,14 +89,12 @@
       const hasPortfolio = p && !p.error;
       let accountValueRow = "—";
       let series = null;
-      if (hasPortfolio) {
-        // Response shape not independently verified from this build environment
-        // (see README) — try a couple of plausible layouts defensively.
-        series =
-          p.accountValueHistory ||
-          p["1d"]?.accountValueHistory ||
-          p.history?.accountValueHistory ||
-          null;
+      if (hasPortfolio && Array.isArray(p)) {
+        // Real shape (confirmed via docs.nado.xyz once this had live
+        // internet access): an array of [period, seriesObject] pairs, not
+        // an object keyed by "1d" the way this used to guess.
+        const dayEntry = p.find((pair) => Array.isArray(pair) && String(pair[0]).toLowerCase() === "day") || p[0];
+        series = dayEntry?.[1]?.accountValueHistory || null;
       }
       if (Array.isArray(series) && series.length) {
         const last = series[series.length - 1];

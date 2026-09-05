@@ -62,8 +62,9 @@ node --test test/clusters.test.js
 | Var | Default |
 |---|---|
 | `PORT` | `3000` |
-| `NADO_ARCHIVE_BASE` | `https://archive.prod.nado.xyz/v1` |
-| `NADO_GATEWAY_BASE` | `https://gateway.prod.nado.xyz/v1` |
+| `NADO_ARCHIVE_BASE` | `https://api.prod.nado.xyz/archive/v1` (archive-indexer: oracle-price, portfolio, events, orders) |
+| `NADO_ARCHIVE_V2_BASE` | `https://api.prod.nado.xyz/archive/v2` (v2 REST: symbols/tickers/trades/contracts) |
+| `NADO_GATEWAY_BASE` | `https://api.prod.nado.xyz/gateway/v2` |
 | `INK_EXPLORER_BASE` | `https://explorer.inkonchain.com` |
 | `ALL_TIME_MAX_PAGES` | `500` — page cap for an "All time" scan (per deposit scan, or per product for mirror trading) |
 | `ALL_TIME_BUDGET_MS` | `50000` — wall-clock budget (ms) for an "All time" scan before it stops and reports `truncated: true` |
@@ -118,16 +119,24 @@ This is a single always-on Node process (`node server.js`), which fits **Railway
 2. Build command: (leave empty / `npm install`). Start command: `node server.js`.
 3. Free instance type works for testing; Render gives you a `*.onrender.com` URL immediately.
 
-## Known unknowns — verify once this is live
+## Debugging live API assumptions (resolved, first production run)
 
-I built this against Nado's published docs (`docs.nado.xyz`) and Blockscout's standard v2 API, but **this sandbox's network access is restricted to a short allowlist** (couldn't reach `archive.prod.nado.xyz` or `explorer.inkonchain.com` from here even during development), so none of the live API calls were tested end-to-end — only the pure detection logic was (11 passing unit tests in `test/clusters.test.js`, using synthetic data). Once deployed somewhere with normal internet access, worth checking:
+This app was originally built in a sandbox with no access to `archive.prod.nado.xyz` / `docs.nado.xyz`, so the Nado Archive API client was written from a mix of incomplete docs and Vertex Protocol architectural similarity, then only unit-tested against synthetic data. Once it was actually deployed and scanned live traffic, two of those guesses turned out wrong — both now fixed, confirmed against the real docs:
 
-1. **`/portfolio` response shape.** The docs describe "8 series as `[period, history]` pairs" without a concrete JSON example. `dashboard.html` and `server.js`'s checker route try a couple of plausible shapes (`portfolio.accountValueHistory`, `portfolio["1d"].accountValueHistory`, etc.) and fail soft to "—" / `null` if none match — so nothing crashes, but the account-value and volume numbers may just show as empty until the real field path is confirmed and adjusted (one-line fix in `dashboard.html`'s `lookupWallet()` and `server.js`'s checker route).
-2. **Market/product discovery.** There's no confirmed "list all markets" endpoint in the reachable docs, so `lib/nadoClient.js`'s `discoverProductIds()` brute-force-probes product IDs 0–40 via the cheap `oracle-price` query and keeps whichever respond. Works, but if Nado has a real `/symbols` or `/products` endpoint it'd be faster and would also give you readable ticker names instead of bare IDs — worth a look at `docs.nado.xyz/developer-resources/api/v2` (its "Archive" section mentions `symbols`/`tickers`).
-3. **Whether the Archive API needs auth for reads.** Nothing in the docs suggested an API key for read-only queries (`matches`, `events`, `portfolio`), but this was never confirmed against a real 200 response.
-4. **`matches` pagination direction.** Implemented as: fetch newest page, take the minimum `submission_idx` in it, request `idx = that - 1` for the next (older) page, stop once a page's oldest timestamp falls before the scan window. This matches the documented cursor semantics but wasn't run against live data.
-5. **`/addresses/{address}/transactions?filter=to` support, and `is_contract`/`public_tags` fields.** Cluster #3's "first funder" lookup (`fetchFirstFunder()` in `lib/inkExplorer.js`) assumes Blockscout's `filter=to` query param restricts results to incoming transactions, and that address-info responses carry `is_contract` and `public_tags`/`metadata.tags` for the automatic exchange-detection heuristic (`isLikelyInfrastructure()`). Both are standard Blockscout v2 fields per its docs, but neither was exercised against a live response — if `filter=to` turns out unsupported, `fetchFirstFunder` still works (it just also collects a wallet's *outgoing* native txs, which won't match `to === address` in the filtering step right after, so results stay correct, just slightly slower).
-6. **Exchange wallet exclude list is empty.** `lib/exchangeWallets.js` ships with no real addresses in it — there was no way to look them up from this sandbox. See "Excluding exchange wallets" above for how to fill it in once the site is live.
+- **Wrong base URL entirely.** The archive-indexer was being called at `https://archive.prod.nado.xyz/v1`, which 404s. The correct unified base is `https://api.prod.nado.xyz/archive/v1`. Fixed in `lib/nadoClient.js`.
+- **`/matches` doesn't exist.** The mirror-trading scan's fill-fetching assumed a `/matches` + `/txs` pair (a Vertex-family shape). Nado's real per-subaccount endpoint is `/orders` (self-contained records, no separate `txs` array to join). Rewritten as `fetchOrders()` / `normalizeOrdersResponse()`. One real capability loss from this: the old code could pair up direct taker↔maker fills from the txs envelope; `/orders` carries no counterparty data, so that signal no longer fires — only the independent mirrored-open/close signal (comparing two wallets' own position changes) still works, which is the one that actually matters for the "duration/closing %" pattern this cluster was built around.
+- **A real "list all markets" endpoint exists**: `GET {archive/v2 base}/symbols`, confirmed via docs. `getKnownProductIds()` now calls this first (also giving real ticker names) and only falls back to the old brute-force `oracle-price` ID-probing if it ever fails.
+- **`/portfolio`'s real shape** is an array of `[period, seriesObject]` pairs (e.g. `[["day", {accountValueHistory: [...], ...}], ...]`), not an object keyed by `"1d"` the way `dashboard.html` and the checker route used to guess. Fixed via `pickPortfolioSeries()` in `lib/nadoClient.js` (and inline in `dashboard.html`, since that's client-side).
+- **`Accept-Encoding` header requirement.** The archive-indexer docs require this header naming gzip/br/deflate; added explicitly to every archive/gateway request rather than relying on `fetch` setting one automatically.
+
+A small **`GET /api/debug/probe`** route (see `server.js`) is left in place — safe, read-only, no secrets — to make the next live-data surprise faster to diagnose: it does a raw oracle-price probe, a raw symbols fetch, a raw orders fetch, and (with `?wallet=0x...`) times a single first-funder lookup, surfacing the real error/timing instead of whatever a normal route's `.catch()` would swallow.
+
+**Still open / worth re-checking if something looks off:**
+
+1. **Whether `/orders` supports a market-wide query with no `subaccounts` filter.** The one documented example always includes a subaccounts filter; `fetchGlobalFills()` calls it with only `product_ids`, which is what the mirror-trading cluster's "whole market's tape" approach needs — check `/api/debug/probe`'s `orders.distinctSubaccounts` field (>1 means it's working as hoped).
+2. **The common-funding-source scan (cluster #3) erroring out (502) even on small windows.** This doesn't touch Nado's API at all — it's pure Ink Explorer (`fetchFirstFunder`, `fetchGlobalDeposits`), so the fix above doesn't address it. Current best guess is real-world pagination latency exceeding Railway's request timeout; `/api/debug/probe?wallet=0x...` reports elapsed time for one such lookup to help confirm.
+3. **`/addresses/{address}/transactions?filter=to` support, and `is_contract`/`public_tags` fields** for the automatic exchange-detection heuristic (`isLikelyInfrastructure()`) — standard Blockscout v2 fields per its docs, still not independently exercised against a live response.
+4. **Exchange wallet exclude list is empty.** `lib/exchangeWallets.js` ships with no real addresses in it. See "Excluding exchange wallets" above for how to fill it in.
 
 If any of these need adjusting, the fix is localized — each item above points at the specific file/function.
 

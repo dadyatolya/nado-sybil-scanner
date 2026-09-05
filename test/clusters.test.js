@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { findDepositClusters, findMirrorTradeClusters, findFundingFanOutClusters, normalizeMatchesResponse } from "../lib/clusters.js";
+import { findDepositClusters, findMirrorTradeClusters, findFundingFanOutClusters, normalizeOrdersResponse } from "../lib/clusters.js";
 import { toSubaccount, addressFromSubaccount } from "../lib/subaccount.js";
 import { relDiff, x18ToNumber, rawToNumber } from "../lib/fixedpoint.js";
 import { parseHoursParam, parseIntParam, parseProductIds } from "../lib/params.js";
@@ -196,22 +196,25 @@ test("findMirrorTradeClusters: direct taker<->maker repeated matches also qualif
   assert.deepEqual(clusters[0].members.sort(), [W1, W4].sort());
 });
 
-test("normalizeMatchesResponse: derives open from a fresh position increase", () => {
+// Shape here matches the REAL /orders response (confirmed via docs.nado.xyz
+// once this was actually deployed with live internet access) — each order
+// record is self-contained, unlike the old guessed "/matches"+"/txs" pair.
+test("normalizeOrdersResponse: derives open from a fresh position increase", () => {
   const sub1 = toSubaccount(W1, "default");
   const raw = {
-    matches: [
+    orders: [
       {
         digest: "0xd1",
         submission_idx: "1",
-        order: { sender: sub1 },
+        subaccount: sub1,
         base_filled: "2000000000000000000", // +2
+        last_fill_timestamp: "1700000000",
         pre_balance: { base: { perp: { product_id: 2, balance: { amount: "0" } } } },
         post_balance: { base: { perp: { product_id: 2, balance: { amount: "2000000000000000000" } } } },
       },
     ],
-    txs: [{ submission_idx: "1", timestamp: "1700000000", tx: { match_orders: { amm: true, product_id: 2 } } }],
   };
-  const fills = normalizeMatchesResponse(raw);
+  const fills = normalizeOrdersResponse(raw);
   assert.equal(fills.length, 1);
   assert.equal(fills[0].kind, "open");
   assert.equal(fills[0].wallet, W1);
@@ -220,42 +223,25 @@ test("normalizeMatchesResponse: derives open from a fresh position increase", ()
   assert.equal(fills[0].timestamp, 1700000000);
 });
 
-test("normalizeMatchesResponse: derives close from a position decrease, and direct pair from non-amm tx", () => {
+test("normalizeOrdersResponse: derives close from a position decrease", () => {
   const sub1 = toSubaccount(W1, "default");
-  const sub2 = toSubaccount(W2, "default");
   const raw = {
-    matches: [
+    orders: [
       {
         digest: "0xd2",
         submission_idx: "2",
-        order: { sender: sub1 },
+        subaccount: sub1,
         base_filled: "-1000000000000000000",
+        last_fill_timestamp: "1700000500",
         pre_balance: { base: { perp: { product_id: 3, balance: { amount: "2000000000000000000" } } } },
         post_balance: { base: { perp: { product_id: 3, balance: { amount: "1000000000000000000" } } } },
       },
     ],
-    txs: [
-      {
-        submission_idx: "2",
-        timestamp: "1700000500",
-        tx: {
-          match_orders: {
-            amm: false,
-            product_id: 3,
-            taker: { order: { sender: sub1, amount: "-1000000000000000000" } },
-            maker: { order: { sender: sub2, amount: "1000000000000000000" } },
-          },
-        },
-      },
-    ],
   };
-  const fills = normalizeMatchesResponse(raw);
+  const fills = normalizeOrdersResponse(raw);
   const close = fills.find((f) => f.kind === "close");
-  const direct = fills.find((f) => f.kind === "direct");
   assert.ok(close);
   assert.equal(close.wallet, W1);
   assert.equal(close.size, 1);
-  assert.ok(direct);
-  assert.equal(direct.takerWallet, W1);
-  assert.equal(direct.makerWallet, W2);
+  assert.equal(close.timestamp, 1700000500);
 });
