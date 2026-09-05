@@ -134,6 +134,18 @@
       let url = "/api/clusters/mirror?hours=" + encodeURIComponent(hours);
       if (products) url += "&products=" + encodeURIComponent(products);
       const data = await fetchJson(url);
+      if (data.ordersUnavailable) {
+        // Not "0 clusters found" — the underlying data source itself
+        // couldn't be reached, which is a very different thing to tell a
+        // non-technical reader.
+        meta.textContent = "";
+        out.innerHTML = errorBox(
+          "Nado's per-wallet trade endpoint (/orders) is currently unreachable, so mirror-trading detection can't run right now. " +
+            "This is not the same as a clean scan finding nothing — the scan couldn't even start." +
+            (data.error ? " Details: " + data.error : "")
+        );
+        return;
+      }
       meta.textContent = `${data.fillsConsidered} fills across products [${data.productIds.join(", ")}]${
         data.truncated ? " (scan hit its time budget — partial)" : ""
       }`;

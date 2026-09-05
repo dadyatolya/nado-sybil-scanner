@@ -125,7 +125,10 @@ const routes = {
   "GET /api/clusters/mirror": async (query, res) => {
     const { hours, isAll } = parseHoursParam(query.get("hours"), 6);
     const productIds = parseProductIds(query.get("products"));
-    const { fills, scanned, truncated, sinceTs, productIds: usedIds } = await fetchGlobalFills({ hours, productIds });
+    const { fills, scanned, truncated, sinceTs, productIds: usedIds, ordersUnavailable, error } = await fetchGlobalFills({
+      hours,
+      productIds,
+    });
     const result = findMirrorTradeClusters(fills, {
       sizeTolerance: 0.05,
       windowSeconds: 15,
@@ -139,6 +142,11 @@ const routes = {
       fillsScanned: scanned,
       fillsConsidered: fills.length,
       truncated,
+      // ordersUnavailable/error distinguish "the /orders endpoint answered
+      // and genuinely found nothing" from "the endpoint never answered" —
+      // see lib/aggregate.js's fetchGlobalFills for why this matters.
+      ordersUnavailable,
+      error,
       clusters: result.clusters,
     });
   },

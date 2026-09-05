@@ -129,14 +129,29 @@ This app was originally built in a sandbox with no access to `archive.prod.nado.
 - **`/portfolio`'s real shape** is an array of `[period, seriesObject]` pairs (e.g. `[["day", {accountValueHistory: [...], ...}], ...]`), not an object keyed by `"1d"` the way `dashboard.html` and the checker route used to guess. Fixed via `pickPortfolioSeries()` in `lib/nadoClient.js` (and inline in `dashboard.html`, since that's client-side).
 - **`Accept-Encoding` header requirement.** The archive-indexer docs require this header naming gzip/br/deflate; added explicitly to every archive/gateway request rather than relying on `fetch` setting one automatically.
 
-A small **`GET /api/debug/probe`** route (see `server.js`) is left in place — safe, read-only, no secrets — to make the next live-data surprise faster to diagnose: it does a raw oracle-price probe, a raw symbols fetch, a raw orders fetch, and (with `?wallet=0x...`) times a single first-funder lookup, surfacing the real error/timing instead of whatever a normal route's `.catch()` would swallow.
+A small **`GET /api/debug/probe`** route (see `server.js`) is left in place — safe, read-only, no secrets — to make the next live-data surprise faster to diagnose: it does a raw oracle-price probe, a raw symbols fetch, a raw orders fetch, a full base-URL × endpoint matrix probe (`?matrix=1`), and (with `?wallet=0x...`) times a single first-funder lookup, surfacing the real error/timing instead of whatever a normal route's `.catch()` would swallow.
+
+### Confirmed blocking issue: `/orders`, `/portfolio`, `/oracle-price` are unreachable
+
+A matrix probe (`/api/debug/probe?matrix=1`) tested all three of these endpoints against **every** documented base URL variant (`archive/v1` and `archive/v2`, unified `api.prod.nado.xyz` and legacy `archive.prod.nado.xyz` hosts — 12 combinations total). **All twelve 404.** Meanwhile `GET .../archive/v2/symbols` (92 real markets) and `GET .../archive/v2/trades?ticker_id=...` (real trade data) both work fine at 200. So this isn't a config mistake on this app's side — the archive-indexer endpoint family that `/orders`, `/portfolio`, and `/oracle-price` belong to appears to not actually be live at any reachable path, despite being documented at docs.nado.xyz.
+
+Practical effect:
+
+- **Cluster #2 (mirror trading) cannot function as originally designed.** It needs per-wallet trade attribution, which only `/orders` provides — the working `/trades` feed is anonymized (no wallet/subaccount field at all, just price/size/timestamp). There is currently no public Nado endpoint that exposes which wallet made which trade.
+- **Wallet portfolio value/volume (Dashboard "look up a wallet" and Checker) cannot be fetched** — that data lives behind `/portfolio`, same story.
+
+Rather than silently return an empty-looking result that reads as "scanned, found nothing", both surfaces now say explicitly that the data source is unreachable:
+
+- `fetchGlobalFills()` in `lib/aggregate.js` tracks whether every single `/orders` request it made actually errored (not just "came back with zero rows") and sets `ordersUnavailable: true` + a plain-English `error` message when so.
+- `GET /api/clusters/mirror` and `GET /api/checker` both pass this through; `clusters.html` and `checker.html` render it as an explicit warning box instead of "no clusters found in this window".
+
+**If this ever changes** (Nado deploys the endpoint, or support points at a different path), the fix is entirely inside `fetchOrders()`/`ARCHIVE_BASE` in `lib/nadoClient.js` — nothing else needs to change, since the rest of the pipeline already assumes `/orders`' real response shape.
 
 **Still open / worth re-checking if something looks off:**
 
-1. **Whether `/orders` supports a market-wide query with no `subaccounts` filter.** The one documented example always includes a subaccounts filter; `fetchGlobalFills()` calls it with only `product_ids`, which is what the mirror-trading cluster's "whole market's tape" approach needs — check `/api/debug/probe`'s `orders.distinctSubaccounts` field (>1 means it's working as hoped).
-2. **The common-funding-source scan (cluster #3) erroring out (502) even on small windows.** This doesn't touch Nado's API at all — it's pure Ink Explorer (`fetchFirstFunder`, `fetchGlobalDeposits`), so the fix above doesn't address it. Current best guess is real-world pagination latency exceeding Railway's request timeout; `/api/debug/probe?wallet=0x...` reports elapsed time for one such lookup to help confirm.
-3. **`/addresses/{address}/transactions?filter=to` support, and `is_contract`/`public_tags` fields** for the automatic exchange-detection heuristic (`isLikelyInfrastructure()`) — standard Blockscout v2 fields per its docs, still not independently exercised against a live response.
-4. **Exchange wallet exclude list is empty.** `lib/exchangeWallets.js` ships with no real addresses in it. See "Excluding exchange wallets" above for how to fill it in.
+1. **The common-funding-source scan (cluster #3) erroring out (502) even on small windows.** This doesn't touch Nado's API at all — it's pure Ink Explorer (`fetchFirstFunder`, `fetchGlobalDeposits`). Current best guess is real-world pagination latency exceeding Railway's request timeout; `/api/debug/probe?wallet=0x...` reports elapsed time for one such lookup to help confirm — not yet tested against a real wallet address.
+2. **`/addresses/{address}/transactions?filter=to` support, and `is_contract`/`public_tags` fields** for the automatic exchange-detection heuristic (`isLikelyInfrastructure()`) — standard Blockscout v2 fields per its docs, still not independently exercised against a live response.
+3. **Exchange wallet exclude list is empty.** `lib/exchangeWallets.js` ships with no real addresses in it. See "Excluding exchange wallets" above for how to fill it in.
 
 If any of these need adjusting, the fix is localized — each item above points at the specific file/function.
 
