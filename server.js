@@ -83,9 +83,11 @@ async function buildDepositsResult({ hours, isAll }) {
   // Nado doesn't expose a "list all accounts" endpoint anywhere in its public
   // API (see README's API-availability notes) — the closest thing that
   // actually exists is "every wallet that has ever deposited USDT0 into
-  // Nado's Clearinghouse contract," which is exactly what this scan already
-  // walks. Surfacing the deduplicated list here (not just cluster groups)
-  // is what answers "how many Nado wallets are there / what are they."
+  // Nado" (via the Endpoint contract — see fetchGlobalDeposits()'s doc
+  // comment in lib/aggregate.js for why it's Endpoint and not Clearinghouse),
+  // which is exactly what this scan already walks. Surfacing the
+  // deduplicated list here (not just cluster groups) is what answers "how
+  // many Nado wallets are there / what are they."
   const wallets = [...new Set(deposits.map((d) => d.wallet))];
   return {
     windowHours: hours,
