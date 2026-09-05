@@ -80,12 +80,21 @@ function requireAddress(query, res) {
 async function buildDepositsResult({ hours, isAll }) {
   const { deposits, scanned, truncated, sinceTs } = await fetchGlobalDeposits({ hours });
   const result = findDepositClusters(deposits, { amountTolerance: 0.05, windowSeconds: 600 });
+  // Nado doesn't expose a "list all accounts" endpoint anywhere in its public
+  // API (see README's API-availability notes) — the closest thing that
+  // actually exists is "every wallet that has ever deposited USDT0 into
+  // Nado's Clearinghouse contract," which is exactly what this scan already
+  // walks. Surfacing the deduplicated list here (not just cluster groups)
+  // is what answers "how many Nado wallets are there / what are they."
+  const wallets = [...new Set(deposits.map((d) => d.wallet))];
   return {
     windowHours: hours,
     allTime: isAll,
     sinceTs,
     depositsScanned: scanned,
     depositsConsidered: deposits.length,
+    uniqueWallets: wallets.length,
+    wallets,
     truncated,
     clusters: result.clusters,
   };

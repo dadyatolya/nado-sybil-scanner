@@ -117,7 +117,9 @@
             { onTick: (ms) => (out.innerHTML = `<div class="spinner"></div> walking Ink Explorer deposit history — ${Math.round(ms / 1000)}s so far, this can take a while for all time…`) }
           )
         : await fetchJson("/api/clusters/deposits?hours=" + encodeURIComponent(hours));
-      meta.textContent = `${data.depositsConsidered} deposits scanned${data.truncated ? " (scan hit its time budget — partial)" : ""}`;
+      meta.textContent = `${data.depositsConsidered} deposits scanned, ${data.uniqueWallets} unique depositor wallets${
+        data.truncated ? " (scan hit its time budget — partial)" : ""
+      }`;
       out.innerHTML = data.clusters.length
         ? data.clusters.map((c) => renderDepositClusterCard(c)).join("")
         : '<p class="empty-state">No matching clusters in this window.</p>';
