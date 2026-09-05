@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { fetchNadoTvlCurrent } from "./lib/defillama.js";
-import { fetchPortfolio, walletSubaccount, pickPortfolioSeries, debugOraclePing, debugOrdersProbe, debugSymbolsProbe } from "./lib/nadoClient.js";
+import { fetchPortfolio, walletSubaccount, pickPortfolioSeries, debugOraclePing, debugOrdersProbe, debugSymbolsProbe, debugMatrixProbe } from "./lib/nadoClient.js";
 import { isAddress, normalizeAddress } from "./lib/subaccount.js";
 import { fetchWalletDeposits, fetchGlobalDeposits, fetchGlobalFills, fetchFundingFanOut, getKnownProductIds, checkAddress } from "./lib/aggregate.js";
 import { findDepositClusters, findMirrorTradeClusters } from "./lib/clusters.js";
@@ -231,10 +231,11 @@ const routes = {
   // results, for the couple of Nado/Ink Explorer assumptions that could
   // only be checked once this was deployed with real internet access.
   "GET /api/debug/probe": async (query, res) => {
-    const [oracle, symbols, orders] = await Promise.all([
+    const [oracle, symbols, orders, matrix] = await Promise.all([
       debugOraclePing(0),
       debugSymbolsProbe(),
       debugOrdersProbe(Number.parseInt(query.get("productId"), 10) || 1),
+      query.get("matrix") ? debugMatrixProbe() : Promise.resolve(null),
     ]);
     let funder = null;
     const wallet = (query.get("wallet") || "").trim();
@@ -247,7 +248,7 @@ const routes = {
         funder = { ok: false, elapsedMs: Date.now() - startedAt, error: err.message };
       }
     }
-    sendJson(res, 200, { oracle, symbols, orders, funder });
+    sendJson(res, 200, { oracle, symbols, orders, matrix, funder });
   },
 
   "GET /api/admin/suspicious-ips": async (query, res, req) => {
