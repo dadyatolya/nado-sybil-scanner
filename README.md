@@ -147,11 +147,23 @@ Rather than silently return an empty-looking result that reads as "scanned, foun
 
 **If this ever changes** (Nado deploys the endpoint, or support points at a different path), the fix is entirely inside `fetchOrders()`/`ARCHIVE_BASE` in `lib/nadoClient.js` — nothing else needs to change, since the rest of the pipeline already assumes `/orders`' real response shape.
 
+### Resolved: cluster #3 (common funding source) timing out / 502
+
+Confirmed live: this scan does up to two Ink Explorer lookups *per depositor* (a single lookup measured ~2s against a busy address), and on anything wider than a narrow window that adds up past Railway's own request timeout — the request gets killed with a bare 502 before this app ever gets to send a response, `truncated: true` or not. Three changes fixed this:
+
+- The scan's own internal time budget (`FUNDING_BUDGET_MS`, `FUNDING_DEPOSIT_BUDGET_MS` in `lib/aggregate.js`) is now much tighter for bounded windows (seconds, not the old 20s), so it reliably finishes and responds before the platform's own timeout ever kicks in.
+- Each individual Explorer lookup inside it now has its own short timeout (`FUNDER_LOOKUP_TIMEOUT_MS`, 4s) instead of the default 12s, so one slow/rate-limited call can't single-handedly blow the budget.
+- **"All time" scans no longer run synchronously inside one HTTP request at all.** A genuinely complete history scan can take minutes — far longer than any request/response cycle should stay open, no matter how the budget is tuned. See the next section.
+
+### "All time" scans now run as background jobs
+
+`GET /api/scan/start?kind=deposits|mirror|funding&hours=all&...` starts a scan in the background and returns a `jobId` immediately (HTTP 202); `GET /api/scan/status?jobId=...` polls it (`status`: `"running"` | `"done"` | `"error"`, plus `result` once done). This works because the app is a single long-lived Node process on Railway, not a serverless function — the scan keeps running after the "start" response is sent, and the browser just checks back every couple of seconds (`runScanJob()` in `public/app.js`) instead of holding one connection open for however long the scan takes. Job state is in-memory only (`lib/jobs.js`) and is lost on a redeploy/restart — acceptable here since a scan is cheap to re-kick-off. The synchronous `GET /api/clusters/*` routes are unchanged and still used for bounded windows, which are fast enough to answer directly. All-time budgets (`ALL_TIME_BUDGET_MS`, `ALL_TIME_MAX_PAGES` in `lib/aggregate.js`) were raised accordingly (10 minutes, 3000 pages) since they're no longer constrained by a platform request timeout — only by not wanting a truly runaway scan.
+
 **Still open / worth re-checking if something looks off:**
 
-1. **The common-funding-source scan (cluster #3) erroring out (502) even on small windows.** This doesn't touch Nado's API at all — it's pure Ink Explorer (`fetchFirstFunder`, `fetchGlobalDeposits`). Current best guess is real-world pagination latency exceeding Railway's request timeout; `/api/debug/probe?wallet=0x...` reports elapsed time for one such lookup to help confirm — not yet tested against a real wallet address.
-2. **`/addresses/{address}/transactions?filter=to` support, and `is_contract`/`public_tags` fields** for the automatic exchange-detection heuristic (`isLikelyInfrastructure()`) — standard Blockscout v2 fields per its docs, still not independently exercised against a live response.
-3. **Exchange wallet exclude list is empty.** `lib/exchangeWallets.js` ships with no real addresses in it. See "Excluding exchange wallets" above for how to fill it in.
+1. **`/addresses/{address}/transactions?filter=to` support, and `is_contract`/`public_tags` fields** for the automatic exchange-detection heuristic (`isLikelyInfrastructure()`) — standard Blockscout v2 fields per its docs, still not independently exercised against a live response.
+2. **Exchange wallet exclude list is empty.** `lib/exchangeWallets.js` ships with no real addresses in it. See "Excluding exchange wallets" above for how to fill it in.
+3. **All-time cluster #3 could still legitimately take several minutes** if Nado has a large depositor base — that's the nature of two Explorer lookups per depositor, not a bug. Watch the elapsed-seconds counter the Clusters page shows while it runs.
 
 If any of these need adjusting, the fix is localized — each item above points at the specific file/function.
 

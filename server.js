@@ -13,6 +13,7 @@ import { explorerAddressUrl, fetchFirstFunder } from "./lib/inkExplorer.js";
 import { parseHoursParam, parseProductIds } from "./lib/params.js";
 import { recordPageView, recordWalletCheck, getStats } from "./lib/stats.js";
 import { recordCheckerIp, getClientIp, getSuspiciousIps } from "./lib/ipActivity.js";
+import { startJob, getJob } from "./lib/jobs.js";
 
 const ADMIN_KEY = process.env.ADMIN_KEY || null;
 
@@ -71,6 +72,80 @@ function requireAddress(query, res) {
   return normalizeAddress(address);
 }
 
+// Builders shared between the synchronous /api/clusters/* routes (fast
+// enough to answer within one request/response cycle) and the background-job
+// routes below (/api/scan/*, for "all time" scans that legitimately can't).
+// Same shape either way, so the frontend renders a job's `result` with
+// exactly the same rendering code it already uses for a direct response.
+async function buildDepositsResult({ hours, isAll }) {
+  const { deposits, scanned, truncated, sinceTs } = await fetchGlobalDeposits({ hours });
+  const result = findDepositClusters(deposits, { amountTolerance: 0.05, windowSeconds: 600 });
+  return {
+    windowHours: hours,
+    allTime: isAll,
+    sinceTs,
+    depositsScanned: scanned,
+    depositsConsidered: deposits.length,
+    truncated,
+    clusters: result.clusters,
+  };
+}
+
+async function buildMirrorResult({ hours, isAll, productIds }) {
+  const { fills, scanned, truncated, sinceTs, productIds: usedIds, ordersUnavailable, error } = await fetchGlobalFills({
+    hours,
+    productIds,
+  });
+  const result = findMirrorTradeClusters(fills, { sizeTolerance: 0.05, windowSeconds: 15, minMatchedTrades: 10 });
+  return {
+    windowHours: hours,
+    allTime: isAll,
+    sinceTs,
+    productIds: usedIds,
+    fillsScanned: scanned,
+    fillsConsidered: fills.length,
+    truncated,
+    ordersUnavailable,
+    error,
+    clusters: result.clusters,
+  };
+}
+
+async function buildFundingResult({ hours, isAll, minFanOut }) {
+  const result = await fetchFundingFanOut({ hours, minFanOut });
+  return {
+    windowHours: hours,
+    allTime: isAll,
+    minFanOut,
+    sinceTs: result.sinceTs,
+    walletsConsidered: result.walletsConsidered,
+    fundersResolved: result.fundersResolved,
+    unresolvedFunders: result.unresolvedFunders,
+    unscannedWallets: result.unscannedWallets,
+    infraExcluded: result.infraExcluded,
+    truncated: result.truncated,
+    elapsedMs: result.elapsedMs,
+    clusters: result.clusters,
+  };
+}
+
+const SCAN_BUILDERS = {
+  deposits: ({ query }) => {
+    const { hours, isAll } = parseHoursParam(query.get("hours"), 24);
+    return buildDepositsResult({ hours, isAll });
+  },
+  mirror: ({ query }) => {
+    const { hours, isAll } = parseHoursParam(query.get("hours"), 6);
+    const productIds = parseProductIds(query.get("products"));
+    return buildMirrorResult({ hours, isAll, productIds });
+  },
+  funding: ({ query }) => {
+    const { hours, isAll } = parseHoursParam(query.get("hours"), 24);
+    const minFanOut = Math.max(2, Number.parseInt(query.get("minFanOut"), 10) || 6);
+    return buildFundingResult({ hours, isAll, minFanOut });
+  },
+};
+
 const routes = {
   "GET /api/stats": async (_query, res) => {
     const stats = await getStats();
@@ -106,67 +181,62 @@ const routes = {
 
   "GET /api/clusters/deposits": async (query, res) => {
     const { hours, isAll } = parseHoursParam(query.get("hours"), 24);
-    const { deposits, scanned, truncated, sinceTs } = await fetchGlobalDeposits({ hours });
-    const result = findDepositClusters(deposits, {
-      amountTolerance: 0.05,
-      windowSeconds: 600,
-    });
-    sendJson(res, 200, {
-      windowHours: hours,
-      allTime: isAll,
-      sinceTs,
-      depositsScanned: scanned,
-      depositsConsidered: deposits.length,
-      truncated,
-      clusters: result.clusters,
-    });
+    sendJson(res, 200, await buildDepositsResult({ hours, isAll }));
   },
 
   "GET /api/clusters/mirror": async (query, res) => {
     const { hours, isAll } = parseHoursParam(query.get("hours"), 6);
     const productIds = parseProductIds(query.get("products"));
-    const { fills, scanned, truncated, sinceTs, productIds: usedIds, ordersUnavailable, error } = await fetchGlobalFills({
-      hours,
-      productIds,
-    });
-    const result = findMirrorTradeClusters(fills, {
-      sizeTolerance: 0.05,
-      windowSeconds: 15,
-      minMatchedTrades: 10,
-    });
-    sendJson(res, 200, {
-      windowHours: hours,
-      allTime: isAll,
-      sinceTs,
-      productIds: usedIds,
-      fillsScanned: scanned,
-      fillsConsidered: fills.length,
-      truncated,
-      // ordersUnavailable/error distinguish "the /orders endpoint answered
-      // and genuinely found nothing" from "the endpoint never answered" —
-      // see lib/aggregate.js's fetchGlobalFills for why this matters.
-      ordersUnavailable,
-      error,
-      clusters: result.clusters,
-    });
+    sendJson(res, 200, await buildMirrorResult({ hours, isAll, productIds }));
   },
 
   "GET /api/clusters/funding": async (query, res) => {
     const { hours, isAll } = parseHoursParam(query.get("hours"), 24);
     const minFanOut = Math.max(2, Number.parseInt(query.get("minFanOut"), 10) || 6);
-    const result = await fetchFundingFanOut({ hours, minFanOut });
+    sendJson(res, 200, await buildFundingResult({ hours, isAll, minFanOut }));
+  },
+
+  // Background-job versions of the three scans above, for windows that can
+  // legitimately take longer than any single HTTP request should stay open
+  // (an "all time" scan especially — see lib/jobs.js for why). The browser
+  // starts a job here, gets a jobId back immediately, then polls
+  // /api/scan/status until it's done. The synchronous routes above are still
+  // used for the normal bounded-window scans (fast enough as-is).
+  "GET /api/scan/start": async (query, res) => {
+    const kind = (query.get("kind") || "").trim();
+    const builder = SCAN_BUILDERS[kind];
+    if (!builder) {
+      sendJson(res, 400, { error: `Unknown scan kind '${kind}'. Expected one of: ${Object.keys(SCAN_BUILDERS).join(", ")}.` });
+      return;
+    }
+    const job = startJob(kind, Object.fromEntries(query.entries()), () => builder({ query }));
+    sendJson(res, 202, { jobId: job.id, kind: job.kind, status: job.status, startedAt: job.startedAt });
+  },
+
+  "GET /api/scan/status": async (query, res) => {
+    const jobId = (query.get("jobId") || "").trim();
+    const job = jobId && getJob(jobId);
+    if (!job) {
+      sendJson(res, 404, { error: "Unknown job id — it may have finished long ago, or the server restarted since it was started." });
+      return;
+    }
+    const elapsedMs = (job.finishedAt || Date.now()) - job.startedAt;
+    if (job.status === "running") {
+      sendJson(res, 200, { jobId: job.id, kind: job.kind, status: job.status, startedAt: job.startedAt, elapsedMs });
+      return;
+    }
+    if (job.status === "error") {
+      sendJson(res, 200, { jobId: job.id, kind: job.kind, status: job.status, startedAt: job.startedAt, elapsedMs, error: job.error });
+      return;
+    }
     sendJson(res, 200, {
-      windowHours: hours,
-      allTime: isAll,
-      minFanOut,
-      sinceTs: result.sinceTs,
-      walletsConsidered: result.walletsConsidered,
-      fundersResolved: result.fundersResolved,
-      unresolvedFunders: result.unresolvedFunders,
-      unscannedWallets: result.unscannedWallets,
-      infraExcluded: result.infraExcluded,
-      truncated: result.truncated,
-      clusters: result.clusters,
+      jobId: job.id,
+      kind: job.kind,
+      status: job.status,
+      startedAt: job.startedAt,
+      finishedAt: job.finishedAt,
+      elapsedMs,
+      result: job.result,
     });
   },
 

@@ -105,11 +105,18 @@
     const out = document.getElementById("deposit-results");
     const meta = document.getElementById("deposit-meta");
     const hours = document.getElementById("deposit-hours").value;
+    const isAll = hours === "all";
     btn.disabled = true;
     out.innerHTML = '<div class="spinner"></div> walking Ink Explorer deposit history…';
     meta.textContent = "";
     try {
-      const data = await fetchJson("/api/clusters/deposits?hours=" + encodeURIComponent(hours));
+      const data = isAll
+        ? await runScanJob(
+            "deposits",
+            { hours: "all" },
+            { onTick: (ms) => (out.innerHTML = `<div class="spinner"></div> walking Ink Explorer deposit history — ${Math.round(ms / 1000)}s so far, this can take a while for all time…`) }
+          )
+        : await fetchJson("/api/clusters/deposits?hours=" + encodeURIComponent(hours));
       meta.textContent = `${data.depositsConsidered} deposits scanned${data.truncated ? " (scan hit its time budget — partial)" : ""}`;
       out.innerHTML = data.clusters.length
         ? data.clusters.map((c) => renderDepositClusterCard(c)).join("")
@@ -127,13 +134,23 @@
     const meta = document.getElementById("mirror-meta");
     const hours = document.getElementById("mirror-hours").value;
     const products = document.getElementById("mirror-products").value.trim();
+    const isAll = hours === "all";
     btn.disabled = true;
     out.innerHTML = '<div class="spinner"></div> pulling Nado trade tape…';
     meta.textContent = "";
     try {
-      let url = "/api/clusters/mirror?hours=" + encodeURIComponent(hours);
-      if (products) url += "&products=" + encodeURIComponent(products);
-      const data = await fetchJson(url);
+      let data;
+      if (isAll) {
+        const params = { hours: "all" };
+        if (products) params.products = products;
+        data = await runScanJob("mirror", params, {
+          onTick: (ms) => (out.innerHTML = `<div class="spinner"></div> pulling Nado trade tape — ${Math.round(ms / 1000)}s so far…`),
+        });
+      } else {
+        let url = "/api/clusters/mirror?hours=" + encodeURIComponent(hours);
+        if (products) url += "&products=" + encodeURIComponent(products);
+        data = await fetchJson(url);
+      }
       if (data.ordersUnavailable) {
         // Not "0 clusters found" — the underlying data source itself
         // couldn't be reached, which is a very different thing to tell a
@@ -165,13 +182,23 @@
     const meta = document.getElementById("funding-meta");
     const hours = document.getElementById("funding-hours").value;
     const minFanOut = document.getElementById("funding-min").value || 6;
+    const isAll = hours === "all";
     btn.disabled = true;
     out.innerHTML = '<div class="spinner"></div> looking up each depositor\'s first funder on Ink Explorer — this can take a while…';
     meta.textContent = "";
     try {
-      const data = await fetchJson(
-        "/api/clusters/funding?hours=" + encodeURIComponent(hours) + "&minFanOut=" + encodeURIComponent(minFanOut)
-      );
+      const data = isAll
+        ? await runScanJob(
+            "funding",
+            { hours: "all", minFanOut },
+            {
+              onTick: (ms) =>
+                (out.innerHTML = `<div class="spinner"></div> looking up each depositor's first funder on Ink Explorer — ${Math.round(
+                  ms / 1000
+                )}s so far, this can take several minutes for all time…`),
+            }
+          )
+        : await fetchJson("/api/clusters/funding?hours=" + encodeURIComponent(hours) + "&minFanOut=" + encodeURIComponent(minFanOut));
       meta.textContent = `${data.walletsConsidered} depositors, ${data.fundersResolved} funders resolved (${data.unresolvedFunders} unresolved)${
         data.infraExcluded ? `, ${data.infraExcluded} excluded as likely exchange/infra` : ""
       }${data.truncated ? " (scan hit its time budget — partial)" : ""}`;

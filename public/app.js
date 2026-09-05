@@ -41,6 +41,34 @@ async function fetchJson(url) {
   return body;
 }
 
+/** Runs a scan as a background job on the server and polls until it's done —
+ * used for "all time" scans, which can legitimately take minutes (far longer
+ * than any single HTTP request should stay open). `kind` is one of
+ * "deposits" | "mirror" | "funding" (see server.js's SCAN_BUILDERS); `params`
+ * is a plain object of query params for that scan. `onTick(elapsedMs)` is
+ * called after every status check while the job is still running, so the
+ * caller can show a live "still going, Ns…" message instead of a static
+ * spinner. Throws if the job errors out server-side; otherwise resolves to
+ * the same result shape the equivalent synchronous /api/clusters/* route
+ * returns. */
+async function runScanJob(kind, params, { onTick, pollMs = 2000 } = {}) {
+  const qs = new URLSearchParams({ kind, ...params });
+  const start = await fetchJson("/api/scan/start?" + qs.toString());
+  const jobId = start.jobId;
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    const status = await fetchJson("/api/scan/status?jobId=" + encodeURIComponent(jobId));
+    if (status.status === "running") {
+      if (onTick) onTick(status.elapsedMs);
+      continue;
+    }
+    if (status.status === "error") {
+      throw new Error(status.error || "Scan failed on the server.");
+    }
+    return status.result;
+  }
+}
+
 function fmtUsd(n) {
   if (n === null || n === undefined || Number.isNaN(n)) return "—";
   const abs = Math.abs(n);
