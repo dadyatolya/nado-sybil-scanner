@@ -7,13 +7,14 @@ import { fileURLToPath } from "node:url";
 import { fetchNadoTvlCurrent } from "./lib/defillama.js";
 import { fetchPortfolio, walletSubaccount, pickPortfolioSeries, debugOraclePing, debugOrdersProbe, debugSymbolsProbe, debugMatrixProbe } from "./lib/nadoClient.js";
 import { isAddress, normalizeAddress } from "./lib/subaccount.js";
-import { fetchWalletDeposits, fetchGlobalDeposits, fetchGlobalFills, fetchFundingFanOut, getKnownProductIds, checkAddress } from "./lib/aggregate.js";
-import { findDepositClusters, findMirrorTradeClusters } from "./lib/clusters.js";
+import { fetchWalletDeposits, fetchGlobalDeposits, fetchGlobalFills, fetchFundingFanOut, getKnownProductIds, checkAddress, getExcludedFunders } from "./lib/aggregate.js";
+import { findDepositClusters, findMirrorTradeClusters, findFundingFanOutClusters } from "./lib/clusters.js";
 import { explorerAddressUrl, fetchFirstFunder, debugTransferSourceProbe, NADO_CONTRACTS } from "./lib/inkExplorer.js";
 import { parseHoursParam, parseProductIds } from "./lib/params.js";
 import { recordPageView, recordWalletCheck, getStats } from "./lib/stats.js";
 import { recordCheckerIp, getClientIp, getSuspiciousIps } from "./lib/ipActivity.js";
 import { startJob, getJob } from "./lib/jobs.js";
+import { loadCheckpoint } from "./lib/checkpoint.js";
 
 const ADMIN_KEY = process.env.ADMIN_KEY || null;
 
@@ -249,6 +250,42 @@ const routes = {
       elapsedMs,
       result: job.result,
     });
+  },
+
+  // Crash-recovery read: the last progress an all-time scan of `kind`
+  // ("deposits" | "funding") managed to save to disk before it either
+  // finished normally or the process died mid-scan (see lib/checkpoint.js —
+  // realistically an OOM kill from Railway's memory limit, given how long
+  // and memory-hungry these scans are). Unlike /api/scan/status, this reads
+  // straight from disk rather than the in-memory jobs Map, so it still
+  // answers even after a restart wiped every in-memory job — the whole
+  // point being "don't lose whatever was already found." For "funding", the
+  // saved funder→funded edges are enough to recompute clusters fresh
+  // (findFundingFanOutClusters is cheap — pure in-memory grouping, no
+  // network calls), so a checkpoint read gets real cluster results too, not
+  // just raw counts.
+  "GET /api/scan/checkpoint": async (query, res) => {
+    const kind = (query.get("kind") || "").trim();
+    if (!["deposits", "funding"].includes(kind)) {
+      sendJson(res, 400, { error: "Query param 'kind' must be 'deposits' or 'funding'." });
+      return;
+    }
+    const cp = await loadCheckpoint(kind);
+    if (!cp) {
+      sendJson(res, 404, {
+        error: `No checkpoint saved yet for '${kind}' — no all-time scan of that kind has run long enough to checkpoint (checkpoints save every ~15s).`,
+      });
+      return;
+    }
+    if (kind === "funding" && Array.isArray(cp.edges)) {
+      const { clusters } = findFundingFanOutClusters(cp.edges, {
+        minFanOut: cp.minFanOut || 6,
+        excludedFunders: getExcludedFunders(),
+      });
+      sendJson(res, 200, { ...cp, clusters });
+      return;
+    }
+    sendJson(res, 200, cp);
   },
 
   "GET /api/checker": async (query, res, req) => {
